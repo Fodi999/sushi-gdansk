@@ -1,0 +1,1511 @@
+'use client'
+
+import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Users,
+  Package,
+  ShoppingCart,
+  DollarSign,
+  TrendingUp,
+  Clock,
+  AlertTriangle,
+  Settings,
+  LogOut,
+  Shield,
+  Edit,
+  Trash2,
+  Eye,
+  Plus,
+  Search,
+  BarChart3,
+  User as UserIcon,
+  Mail,
+  Phone,
+  MapPin,
+} from 'lucide-react'
+import { signOut } from 'next-auth/react'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+
+interface AdminStats {
+  totalUsers: number
+  totalOrders: number
+  totalRevenue: number
+  pendingOrders: number
+  totalProducts: number
+  activeUsers: number
+  newUsersThisMonth: number
+  adminCount: number
+}
+
+interface Order {
+  id: string
+  status: string
+  total: number
+  createdAt: string
+  deliveryAddress: string
+  phone: string
+  notes?: string
+  user: {
+    name: string
+    email: string
+    phone?: string
+  }
+  orderItems: {
+    id: string
+    quantity: number
+    price: number
+    product: {
+      name: string
+    }
+  }[]
+}
+
+interface Product {
+  id: string
+  name: string
+  price: number
+  weight: string
+  available: boolean
+  category: {
+    name: string
+  }
+}
+
+interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+  createdAt: string
+  _count: {
+    orders: number
+  }
+}
+
+interface StockItem {
+  id: string
+  ingredientId: string
+  quantity: number
+  unit: string
+  grossWeight?: number
+  netWeight?: number
+  purchasePrice?: number
+  supplier?: string
+  expiryDate?: string
+  receivedDate: string
+  ingredient: {
+    id: string
+    name: string
+    category: string
+    unit: string
+  }
+}
+
+interface StockMovement {
+  id: string
+  type: string
+  productName: string
+  quantity: number
+  unit: string
+  price?: number
+  supplier?: string
+  notes?: string
+  createdBy?: string
+  createdAt: string
+}
+
+// Функция для перевода категорий ингредиентов
+const getCategoryLabel = (category: string): string => {
+  const labels: Record<string, string> = {
+    FISH: 'Рыба',
+    SEAFOOD: 'Морепродукты',
+    RICE: 'Рис',
+    VEGETABLES: 'Овощи',
+    SEAWEED: 'Водоросли',
+    SAUCES: 'Соусы',
+    CHEESE: 'Сыры',
+    SEASONINGS: 'Приправы',
+    PACKAGING: 'Упаковка',
+    OTHER: 'Прочее',
+  }
+  return labels[category] || category
+}
+
+export default function AdminDashboard() {
+  const { data: session, status } = useSession()
+  const router = useRouter()
+  const [stats, setStats] = useState<AdminStats | null>(null)
+  const [orders, setOrders] = useState<Order[]>([])
+  const [products, setProducts] = useState<Product[]>([])
+  const [users, setUsers] = useState<User[]>([])
+  const [ingredients, setIngredients] = useState<any[]>([])
+  const [stockItems, setStockItems] = useState<StockItem[]>([])
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [showAddStockDialog, setShowAddStockDialog] = useState(false)
+  const [submittingStock, setSubmittingStock] = useState(false)
+  const [stockFormData, setStockFormData] = useState({
+    ingredientId: '',
+    unit: 'кг',
+    grossWeight: 0, // Брутто (сколько пришло)
+    netWeight: 0, // Нетто (после обработки)
+    purchasePrice: 0,
+    totalPrice: 0,
+    supplier: '',
+    expiryDate: '',
+    receivedDate: new Date().toISOString().split('T')[0],
+    notes: '',
+  })
+  const [wastagePercent, setWastagePercent] = useState<number>(0)
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/admin/login')
+      return
+    }
+
+    if (session) {
+      checkAdminAccess()
+      fetchStats()
+      fetchOrders()
+      fetchProducts()
+      fetchUsers()
+      fetchStockItems()
+      fetchStockMovements()
+    }
+  }, [session, status, router])
+
+  const checkAdminAccess = async () => {
+    try {
+      const response = await fetch('/api/auth/check-admin')
+      const data = await response.json()
+      
+      if (!data.isAdmin) {
+        router.push('/admin/login')
+      }
+    } catch (error) {
+      console.error('Error checking admin access:', error)
+      router.push('/admin/login')
+    }
+  }
+
+  const fetchStats = async () => {
+    try {
+      const response = await fetch('/api/admin/stats')
+      if (response.ok) {
+        const data = await response.json()
+        setStats(data)
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('/api/admin/orders')
+      if (response.ok) {
+        const data = await response.json()
+        setOrders(data)
+      }
+    } catch (error) {
+      console.error('Error fetching orders:', error)
+    }
+  }
+
+  const fetchProducts = async () => {
+    try {
+      const response = await fetch('/api/admin/products')
+      if (response.ok) {
+        const data = await response.json()
+        setProducts(data)
+      }
+    } catch (error) {
+      console.error('Error fetching products:', error)
+    }
+  }
+
+  const fetchUsers = async () => {
+    try {
+      const response = await fetch('/api/admin/users')
+      if (response.ok) {
+        const data = await response.json()
+        setUsers(data)
+      }
+    } catch (error) {
+      console.error('Error fetching users:', error)
+    }
+  }
+
+  const fetchStockItems = async () => {
+    try {
+      const response = await fetch('/api/admin/stock')
+      if (response.ok) {
+        const data = await response.json()
+        // API возвращает массив ингредиентов со вложенными stockItems
+        setIngredients(data)
+        // Извлекаем все stockItems из всех ингредиентов
+        const allStockItems = data.flatMap((ing: any) => ing.stockItems || [])
+        setStockItems(allStockItems)
+      }
+    } catch (error) {
+      console.error('Error fetching stock items:', error)
+    }
+  }
+
+  const fetchStockMovements = async () => {
+    try {
+      const response = await fetch('/api/admin/stock/movements')
+      if (response.ok) {
+        const data = await response.json()
+        setStockMovements(data)
+      }
+    } catch (error) {
+      console.error('Error fetching stock movements:', error)
+    }
+  }
+
+  const handleAddStockItem = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmittingStock(true)
+
+    try {
+      const response = await fetch('/api/admin/stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...stockFormData,
+          expiryDate: stockFormData.expiryDate || null,
+        }),
+      })
+
+      if (response.ok) {
+        // Обновляем список товаров на складе
+        await fetchStockItems()
+        await fetchStockMovements()
+        
+        // Закрываем диалог и очищаем форму
+        setShowAddStockDialog(false)
+        setStockFormData({
+          ingredientId: '',
+          unit: 'кг',
+          grossWeight: 0,
+          netWeight: 0,
+          purchasePrice: 0,
+          totalPrice: 0,
+          supplier: '',
+          expiryDate: '',
+          receivedDate: new Date().toISOString().split('T')[0],
+          notes: '',
+        })
+        setWastagePercent(0)
+      } else {
+        const data = await response.json()
+        alert(data.error || 'Ошибка при добавлении товара')
+      }
+    } catch (error) {
+      console.error('Error adding stock item:', error)
+      alert('Ошибка при добавлении товара')
+    } finally {
+      setSubmittingStock(false)
+    }
+  }
+
+  const updateOrderStatus = async (orderId: string, newStatus: string) => {
+    try {
+      const response = await fetch(`/api/admin/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      
+      if (response.ok) {
+        fetchOrders()
+        fetchStats()
+      }
+    } catch (error) {
+      console.error('Error updating order:', error)
+    }
+  }
+
+  const toggleProductAvailability = async (productId: string, available: boolean) => {
+    try {
+      const response = await fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available }),
+      })
+      
+      if (response.ok) {
+        fetchProducts()
+      }
+    } catch (error) {
+      console.error('Error updating product:', error)
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    const colors: { [key: string]: string } = {
+      PENDING: 'bg-yellow-100 text-yellow-800',
+      CONFIRMED: 'bg-blue-100 text-blue-800',
+      PREPARING: 'bg-orange-100 text-orange-800',
+      READY: 'bg-purple-100 text-purple-800',
+      DELIVERING: 'bg-indigo-100 text-indigo-800',
+      DELIVERED: 'bg-green-100 text-green-800',
+      CANCELLED: 'bg-red-100 text-red-800',
+    }
+    return colors[status] || 'bg-gray-100 text-gray-800'
+  }
+
+  const getStatusLabel = (status: string) => {
+    const labels: { [key: string]: string } = {
+      PENDING: 'Ожидает',
+      CONFIRMED: 'Подтвержден',
+      PREPARING: 'Готовится',
+      READY: 'Готов',
+      DELIVERING: 'Доставляется',
+      DELIVERED: 'Доставлен',
+      CANCELLED: 'Отменен',
+    }
+    return labels[status] || status
+  }
+
+  if (status === 'loading' || loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600 mx-auto mb-4"></div>
+          <p>Загрузка админ панели...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Хедер админ панели */}
+      <header className="bg-white border-b px-6 py-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center">
+              <Shield className="h-5 w-5 text-orange-600" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold">Панель администратора</h1>
+              <p className="text-sm text-gray-600">Суши Город</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-4">
+            <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
+              <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+              Онлайн
+            </Badge>
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600">
+                {session?.user?.name || session?.user?.email}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => signOut({ callbackUrl: '/admin/login' })}
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="container py-8 px-6">
+        {/* Статистика */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Общий доход</CardTitle>
+              <DollarSign className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.totalRevenue || 0} ₽</div>
+              <p className="text-xs text-muted-foreground">За все время</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Заказы</CardTitle>
+              <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.totalOrders || 0}</div>
+              <p className="text-xs text-muted-foreground">
+                В ожидании: {stats?.pendingOrders || 0}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Пользователи</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.totalUsers || 0}</div>
+              <p className="text-xs text-muted-foreground">
+                Активных: {stats?.activeUsers || 0} | Новых: {stats?.newUsersThisMonth || 0}
+              </p>
+              <div className="mt-2 flex items-center space-x-2">
+                <Badge variant="outline" className="text-xs">
+                  <Shield className="h-3 w-3 mr-1" />
+                  {stats?.adminCount || 0} админ.
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Товары</CardTitle>
+              <Package className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats?.totalProducts || 0}</div>
+              <p className="text-xs text-muted-foreground">В наличии</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Основной контент */}
+        <Tabs defaultValue="orders" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-6">
+            <TabsTrigger value="orders">Заказы</TabsTrigger>
+            <TabsTrigger value="products">Товары</TabsTrigger>
+            <TabsTrigger value="stock">Склад</TabsTrigger>
+            <TabsTrigger value="users">Пользователи</TabsTrigger>
+            <TabsTrigger value="analytics">Аналитика</TabsTrigger>
+            <TabsTrigger value="settings">Настройки</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="orders">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Управление заказами</CardTitle>
+                    <CardDescription>
+                      Просмотр и управление заказами клиентов
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="w-48">
+                        <SelectValue placeholder="Фильтр по статусу" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ALL">Все заказы</SelectItem>
+                        <SelectItem value="PENDING">Ожидают</SelectItem>
+                        <SelectItem value="CONFIRMED">Подтверждено</SelectItem>
+                        <SelectItem value="PREPARING">Готовится</SelectItem>
+                        <SelectItem value="READY">Готов</SelectItem>
+                        <SelectItem value="DELIVERING">Доставляется</SelectItem>
+                        <SelectItem value="DELIVERED">Доставлен</SelectItem>
+                        <SelectItem value="CANCELLED">Отменен</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      placeholder="Поиск по ID или клиенту..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-64"
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {orders.length === 0 ? (
+                  <div className="text-center py-8">
+                    <ShoppingCart className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">Нет заказов</h3>
+                    <p className="text-gray-600">
+                      Пока нет ни одного заказа
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {orders
+                      .filter(order => {
+                        // Фильтр по статусу
+                        if (statusFilter !== 'ALL' && order.status !== statusFilter) {
+                          return false
+                        }
+                        // Поиск
+                        const searchLower = searchQuery.toLowerCase()
+                        return order.id.toLowerCase().includes(searchLower) ||
+                          order.user.name.toLowerCase().includes(searchLower) ||
+                          order.user.email.toLowerCase().includes(searchLower)
+                      })
+                      .map((order) => (
+                      <div key={order.id} className="border rounded-lg p-6 bg-white shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <Badge className={getStatusColor(order.status)}>
+                              {getStatusLabel(order.status)}
+                            </Badge>
+                            <span className="font-semibold text-lg">
+                              Заказ #{order.id.slice(-8)}
+                            </span>
+                          </div>
+                          <span className="text-2xl font-bold text-orange-600">
+                            {order.total} ₽
+                          </span>
+                        </div>
+
+                        <div className="grid md:grid-cols-3 gap-6 mb-4">
+                          {/* Информация о клиенте */}
+                          <div className="space-y-2">
+                            <p className="text-sm font-semibold text-gray-700 mb-2">Клиент:</p>
+                            <div className="flex items-center space-x-2">
+                              <UserIcon className="h-4 w-4 text-gray-400" />
+                              <p className="font-medium">{order.user.name}</p>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Mail className="h-4 w-4 text-gray-400" />
+                              <p className="text-sm text-gray-600">{order.user.email}</p>
+                            </div>
+                            {(order.phone || order.user.phone) && (
+                              <div className="flex items-center space-x-2">
+                                <Phone className="h-4 w-4 text-gray-400" />
+                                <p className="text-sm text-gray-600">{order.phone || order.user.phone}</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Детали доставки */}
+                          <div className="space-y-2">
+                            <p className="text-sm font-semibold text-gray-700 mb-2">Доставка:</p>
+                            {order.deliveryAddress && (
+                              <div className="flex items-start space-x-2">
+                                <MapPin className="h-4 w-4 text-gray-400 mt-0.5" />
+                                <p className="text-sm text-gray-600">{order.deliveryAddress}</p>
+                              </div>
+                            )}
+                            <div className="flex items-center space-x-2">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              <p className="text-sm text-gray-600">
+                                {new Date(order.createdAt).toLocaleString('ru-RU', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </p>
+                            </div>
+                            {order.notes && (
+                              <div className="mt-2">
+                                <p className="text-xs text-gray-500">Комментарий:</p>
+                                <p className="text-sm text-gray-700 italic">"{order.notes}"</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Состав заказа */}
+                          <div className="space-y-2">
+                            <p className="text-sm font-semibold text-gray-700 mb-2">Состав заказа:</p>
+                            <div className="space-y-1">
+                              {order.orderItems.map((item) => (
+                                <div key={item.id} className="flex justify-between text-sm">
+                                  <span className="text-gray-700">
+                                    {item.product.name} <span className="text-gray-500">x{item.quantity}</span>
+                                  </span>
+                                  <span className="text-gray-600 font-medium">
+                                    {(item.price * item.quantity).toLocaleString('ru-RU')} ₽
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <Separator className="my-2" />
+                            <div className="flex justify-between font-semibold text-sm">
+                              <span>Итого:</span>
+                              <span className="text-orange-600">{order.total.toLocaleString('ru-RU')} ₽</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-4 border-t">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm text-gray-600 font-medium">Изменить статус:</span>
+                            <Select
+                              value={order.status}
+                              onValueChange={(value) => updateOrderStatus(order.id, value)}
+                            >
+                              <SelectTrigger className="w-48">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="PENDING">Ожидает</SelectItem>
+                                <SelectItem value="CONFIRMED">Подтвержден</SelectItem>
+                                <SelectItem value="PREPARING">Готовится</SelectItem>
+                                <SelectItem value="READY">Готов</SelectItem>
+                                <SelectItem value="DELIVERING">Доставляется</SelectItem>
+                                <SelectItem value="DELIVERED">Доставлен</SelectItem>
+                                <SelectItem value="CANCELLED">Отменен</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          
+                          <Button variant="outline" size="sm">
+                            <Eye className="h-4 w-4 mr-2" />
+                            Детали
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="products">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Управление товарами</CardTitle>
+                    <CardDescription>
+                      Каталог продуктов и управление наличием
+                    </CardDescription>
+                  </div>
+                  <Button>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Добавить товар
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {products.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">Нет товаров</h3>
+                    <p className="text-gray-600">
+                      Добавьте первый товар в каталог
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {products.map((product) => (
+                      <div key={product.id} className="flex items-center justify-between border rounded-lg p-4">
+                        <div className="flex items-center space-x-4">
+                          <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                            <span className="text-2xl">🍣</span>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold">{product.name}</h4>
+                            <p className="text-sm text-gray-600">
+                              {product.category.name} • {product.weight}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-4">
+                          <span className="text-lg font-bold text-orange-600">
+                            {product.price} ₽
+                          </span>
+                          
+                          <Badge 
+                            className={product.available ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}
+                          >
+                            {product.available ? 'В наличии' : 'Нет в наличии'}
+                          </Badge>
+
+                          <div className="flex space-x-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => toggleProductAvailability(product.id, !product.available)}
+                            >
+                              {product.available ? 'Скрыть' : 'Показать'}
+                            </Button>
+                            <Button variant="ghost" size="sm">
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm">
+                              <Trash2 className="h-4 w-4 text-red-600" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="stock">
+            <div className="grid gap-6">
+              {/* Складской учет */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Склад продуктов</CardTitle>
+                      <CardDescription>
+                        Управление запасами, приход и списание товаров
+                      </CardDescription>
+                    </div>
+                    <Button onClick={() => setShowAddStockDialog(true)}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Добавить приход
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {stockItems.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                      <h3 className="text-lg font-semibold mb-2">Склад пуст</h3>
+                      <p className="text-gray-600">
+                        Добавьте первый товар на склад
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {stockItems.map((item) => (
+                        <div key={item.id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-3 mb-2">
+                                <h4 className="font-semibold text-lg">{item.ingredient.name}</h4>
+                                <Badge variant="outline">
+                                  {getCategoryLabel(item.ingredient.category)}
+                                </Badge>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <div>
+                                  <p className="text-gray-500">Количество:</p>
+                                  <p className="font-semibold">{item.quantity} {item.unit}</p>
+                                </div>
+                                
+                                {item.grossWeight && (
+                                  <div>
+                                    <p className="text-gray-500">Вес брутто:</p>
+                                    <p className="font-semibold">{item.grossWeight} кг</p>
+                                  </div>
+                                )}
+                                
+                                {item.netWeight && (
+                                  <div>
+                                    <p className="text-gray-500">Вес нетто:</p>
+                                    <p className="font-semibold">{item.netWeight} кг</p>
+                                  </div>
+                                )}
+                                
+                                {item.purchasePrice && (
+                                  <div>
+                                    <p className="text-gray-500">Закупочная цена:</p>
+                                    <p className="font-semibold">{item.purchasePrice} ₽</p>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3">
+                                {item.supplier && (
+                                  <div>
+                                    <p className="text-gray-500">Поставщик:</p>
+                                    <p className="font-medium">{item.supplier}</p>
+                                  </div>
+                                )}
+                                
+                                <div>
+                                  <p className="text-gray-500">Дата прихода:</p>
+                                  <p className="font-medium">
+                                    {new Date(item.receivedDate).toLocaleDateString('ru-RU')}
+                                  </p>
+                                </div>
+                                
+                                {item.expiryDate && (
+                                  <div>
+                                    <p className="text-gray-500">Срок годности:</p>
+                                    <p className="font-medium text-orange-600">
+                                      до {new Date(item.expiryDate).toLocaleDateString('ru-RU')}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            <div className="flex flex-col space-y-2 ml-4">
+                              <Button variant="outline" size="sm">
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="text-red-600">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* История движений */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>История движений</CardTitle>
+                  <CardDescription>
+                    Последние операции со складом
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {stockMovements.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>Нет записей о движении товаров</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {stockMovements.slice(0, 10).map((movement) => (
+                        <div key={movement.id} className="flex items-center justify-between border-b pb-2">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2">
+                              <Badge 
+                                className={
+                                  movement.type === 'ARRIVAL' 
+                                    ? 'bg-green-100 text-green-800' 
+                                    : 'bg-red-100 text-red-800'
+                                }
+                              >
+                                {movement.type === 'ARRIVAL' ? 'Приход' : 'Списание'}
+                              </Badge>
+                              <span className="font-medium">{movement.productName}</span>
+                            </div>
+                            <div className="text-sm text-gray-600 mt-1">
+                              <span>{movement.quantity} {movement.unit}</span>
+                              {movement.price && <span> • {movement.price} ₽</span>}
+                              {movement.supplier && <span> • {movement.supplier}</span>}
+                              {movement.createdBy && <span> • {movement.createdBy}</span>}
+                            </div>
+                          </div>
+                          <div className="text-sm text-gray-500">
+                            {new Date(movement.createdAt).toLocaleDateString('ru-RU')}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Диалог добавления товара на склад */}
+            <Dialog open={showAddStockDialog} onOpenChange={setShowAddStockDialog}>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Добавить приход товара на склад</DialogTitle>
+                  <DialogDescription>
+                    Заполните информацию о поступлении товара
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <form onSubmit={handleAddStockItem}>
+                  <div className="grid gap-4 py-4">
+                    {/* Выбор ингредиента */}
+                    <div className="space-y-2">
+                      <Label htmlFor="ingredientId">Ингредиент *</Label>
+                      <Select
+                        value={stockFormData.ingredientId}
+                        onValueChange={(value) => 
+                          setStockFormData({ ...stockFormData, ingredientId: value })
+                        }
+                        required
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Выберите ингредиент" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ingredients.map((ingredient) => (
+                            <SelectItem key={ingredient.id} value={ingredient.id}>
+                              {ingredient.name} - {getCategoryLabel(ingredient.category)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Единица измерения */}
+                    <div className="space-y-2">
+                      <Label htmlFor="unit">Единица измерения *</Label>
+                      <Select
+                        value={stockFormData.unit}
+                        onValueChange={(value) => 
+                          setStockFormData({ ...stockFormData, unit: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="шт">Штуки (шт)</SelectItem>
+                          <SelectItem value="кг">Килограммы (кг)</SelectItem>
+                          <SelectItem value="г">Граммы (г)</SelectItem>
+                          <SelectItem value="л">Литры (л)</SelectItem>
+                          <SelectItem value="мл">Миллилитры (мл)</SelectItem>
+                          <SelectItem value="упак">Упаковки (упак)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Вес брутто и нетто */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="grossWeight">Брутто ({stockFormData.unit}) *</Label>
+                        <Input
+                          id="grossWeight"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={stockFormData.grossWeight}
+                          onChange={(e) => {
+                            const gross = parseFloat(e.target.value) || 0
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              grossWeight: gross
+                            })
+                            // Автоматически пересчитываем процент отхода
+                            if (gross > 0 && stockFormData.netWeight > 0) {
+                              setWastagePercent(((gross - stockFormData.netWeight) / gross) * 100)
+                            }
+                          }}
+                          required
+                          placeholder="Сколько пришло"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="netWeight">Нетто ({stockFormData.unit}) *</Label>
+                        <Input
+                          id="netWeight"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={stockFormData.netWeight}
+                          onChange={(e) => {
+                            const net = parseFloat(e.target.value) || 0
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              netWeight: net 
+                            })
+                            // Автоматически пересчитываем процент отхода
+                            if (stockFormData.grossWeight > 0 && net > 0) {
+                              setWastagePercent(((stockFormData.grossWeight - net) / stockFormData.grossWeight) * 100)
+                            }
+                          }}
+                          required
+                          placeholder="После обработки"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Отход (вычисляется автоматически) */}
+                    {wastagePercent > 0 && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-md">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-amber-800">
+                            Отход: {wastagePercent.toFixed(1)}%
+                          </span>
+                          <span className="text-xs text-amber-600">
+                            ({(stockFormData.grossWeight - stockFormData.netWeight).toFixed(2)} {stockFormData.unit})
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Закупочная цена и общая сумма */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="purchasePrice">Цена за {stockFormData.unit} (₽) *</Label>
+                        <Input
+                          id="purchasePrice"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={stockFormData.purchasePrice}
+                          onChange={(e) => 
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              purchasePrice: parseFloat(e.target.value) || 0 
+                            })
+                          }
+                          required
+                          placeholder="Цена за единицу"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="totalPrice">Общая сумма (₽)</Label>
+                        <Input
+                          id="totalPrice"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={stockFormData.totalPrice}
+                          onChange={(e) => 
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              totalPrice: parseFloat(e.target.value) || 0 
+                            })
+                          }
+                          placeholder="Опционально"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Поставщик */}
+                    <div className="space-y-2">
+                      <Label htmlFor="supplier">Поставщик</Label>
+                      <Input
+                        id="supplier"
+                        value={stockFormData.supplier}
+                        onChange={(e) => 
+                          setStockFormData({ 
+                            ...stockFormData, 
+                            supplier: e.target.value 
+                          })
+                        }
+                        placeholder="Название поставщика"
+                      />
+                    </div>
+
+                    {/* Дата поступления и срок годности */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="receivedDate">Дата поступления *</Label>
+                        <Input
+                          id="receivedDate"
+                          type="date"
+                          value={stockFormData.receivedDate}
+                          onChange={(e) => 
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              receivedDate: e.target.value 
+                            })
+                          }
+                          required
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="expiryDate">Срок годности</Label>
+                        <Input
+                          id="expiryDate"
+                          type="date"
+                          value={stockFormData.expiryDate}
+                          onChange={(e) => 
+                            setStockFormData({ 
+                              ...stockFormData, 
+                              expiryDate: e.target.value 
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {/* Комментарий */}
+                    <div className="space-y-2">
+                      <Label htmlFor="notes">Комментарий</Label>
+                      <Textarea
+                        id="notes"
+                        value={stockFormData.notes}
+                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => 
+                          setStockFormData({ 
+                            ...stockFormData, 
+                            notes: e.target.value 
+                          })
+                        }
+                        placeholder="Особенности хранения, условия доставки и т.д."
+                        rows={3}
+                      />
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowAddStockDialog(false)}
+                      disabled={submittingStock}
+                    >
+                      Отмена
+                    </Button>
+                    <Button type="submit" disabled={submittingStock}>
+                      {submittingStock ? 'Добавление...' : 'Добавить на склад'}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </TabsContent>
+
+          <TabsContent value="users">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Управление пользователями</CardTitle>
+                    <CardDescription>
+                      Просмотр пользователей и их активность
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => window.open('/api/admin/export-users', '_blank')}
+                  >
+                    <BarChart3 className="h-4 w-4 mr-2" />
+                    Экспорт в CSV
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {users.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">Нет пользователей</h3>
+                    <p className="text-gray-600">
+                      Пока нет зарегистрированных пользователей
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {users.map((user) => (
+                      <div key={user.id} className="flex items-center justify-between border rounded-lg p-4">
+                        <div className="flex items-center space-x-4">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                            user.role === 'ADMIN' ? 'bg-orange-100' : 'bg-gray-100'
+                          }`}>
+                            {user.role === 'ADMIN' ? (
+                              <Shield className="h-5 w-5 text-orange-600" />
+                            ) : (
+                              <UserIcon className="h-5 w-5 text-gray-600" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h4 className="font-semibold">{user.name}</h4>
+                              {user.role === 'ADMIN' && (
+                                <Badge className="bg-orange-100 text-orange-800">
+                                  Администратор
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-600">{user.email}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-4">
+                          <div className="text-right">
+                            <p className="text-sm text-gray-600">Заказов</p>
+                            <p className="font-semibold">{user._count.orders}</p>
+                          </div>
+                          
+                          <div className="text-right">
+                            <p className="text-sm text-gray-600">Регистрация</p>
+                            <p className="text-sm">
+                              {new Date(user.createdAt).toLocaleDateString('ru-RU')}
+                            </p>
+                          </div>
+
+                          <div className="flex space-x-2">
+                            <Button variant="ghost" size="sm">
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            {user.role !== 'ADMIN' && (
+                              <Button variant="ghost" size="sm">
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="analytics">
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Статистика пользователей</CardTitle>
+                  <CardDescription>
+                    Детальная информация о зарегистрированных пользователях
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="p-6 border rounded-lg bg-gradient-to-br from-blue-50 to-blue-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <Users className="h-8 w-8 text-blue-600" />
+                        <Badge className="bg-blue-600 text-white">
+                          Всего
+                        </Badge>
+                      </div>
+                      <div className="text-3xl font-bold text-blue-900 mb-2">
+                        {stats?.totalUsers || 0}
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        Зарегистрированных пользователей
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg bg-gradient-to-br from-green-50 to-green-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <TrendingUp className="h-8 w-8 text-green-600" />
+                        <Badge className="bg-green-600 text-white">
+                          Новые
+                        </Badge>
+                      </div>
+                      <div className="text-3xl font-bold text-green-900 mb-2">
+                        {stats?.newUsersThisMonth || 0}
+                      </div>
+                      <p className="text-sm text-green-700">
+                        Новых пользователей в этом месяце
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg bg-gradient-to-br from-purple-50 to-purple-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <Clock className="h-8 w-8 text-purple-600" />
+                        <Badge className="bg-purple-600 text-white">
+                          Активные
+                        </Badge>
+                      </div>
+                      <div className="text-3xl font-bold text-purple-900 mb-2">
+                        {stats?.activeUsers || 0}
+                      </div>
+                      <p className="text-sm text-purple-700">
+                        Активных пользователей за 30 дней
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <Shield className="h-6 w-6 text-orange-600" />
+                        <h3 className="font-semibold text-lg">Администраторы</h3>
+                      </div>
+                      <div className="text-4xl font-bold text-orange-600 mb-2">
+                        {stats?.adminCount || 0}
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Пользователей с правами администратора
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <BarChart3 className="h-6 w-6 text-indigo-600" />
+                        <h3 className="font-semibold text-lg">Конверсия</h3>
+                      </div>
+                      <div className="text-4xl font-bold text-indigo-600 mb-2">
+                        {stats?.totalOrders && stats?.totalUsers 
+                          ? ((stats.totalOrders / stats.totalUsers) * 100).toFixed(1)
+                          : 0}%
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Средний коэффициент заказов на пользователя
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Статистика заказов</CardTitle>
+                  <CardDescription>
+                    Общая информация по заказам и выручке
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <ShoppingCart className="h-6 w-6 text-blue-600" />
+                        <h3 className="font-semibold">Всего заказов</h3>
+                      </div>
+                      <div className="text-3xl font-bold mb-2">
+                        {stats?.totalOrders || 0}
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        За все время работы
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <DollarSign className="h-6 w-6 text-green-600" />
+                        <h3 className="font-semibold">Общая выручка</h3>
+                      </div>
+                      <div className="text-3xl font-bold text-green-600 mb-2">
+                        {stats?.totalRevenue?.toLocaleString('ru-RU') || 0} ₽
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Средний чек: {stats?.totalOrders && stats?.totalRevenue
+                          ? Math.round(stats.totalRevenue / stats.totalOrders).toLocaleString('ru-RU')
+                          : 0} ₽
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <AlertTriangle className="h-6 w-6 text-yellow-600" />
+                        <h3 className="font-semibold">В обработке</h3>
+                      </div>
+                      <div className="text-3xl font-bold text-yellow-600 mb-2">
+                        {stats?.pendingOrders || 0}
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Заказов ожидают подтверждения
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Товары</CardTitle>
+                  <CardDescription>
+                    Информация о каталоге продуктов
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <Package className="h-6 w-6 text-purple-600" />
+                        <h3 className="font-semibold">Доступные товары</h3>
+                      </div>
+                      <div className="text-3xl font-bold mb-2">
+                        {stats?.totalProducts || 0}
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Товаров доступно для заказа
+                      </p>
+                    </div>
+
+                    <div className="p-6 border rounded-lg">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <TrendingUp className="h-6 w-6 text-indigo-600" />
+                        <h3 className="font-semibold">Популярность</h3>
+                      </div>
+                      <div className="text-3xl font-bold mb-2">
+                        {stats?.totalOrders && stats?.totalProducts
+                          ? (stats.totalOrders / stats.totalProducts).toFixed(1)
+                          : 0}
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        Среднее количество заказов на товар
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <Card>
+              <CardHeader>
+                <CardTitle>Настройки системы</CardTitle>
+                <CardDescription>
+                  Общие настройки и конфигурация
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div>
+                      <h4 className="font-medium">Уведомления о новых заказах</h4>
+                      <p className="text-sm text-gray-600">
+                        Получать уведомления о новых заказах
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm">
+                      Включено
+                    </Button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div>
+                      <h4 className="font-medium">Автоматический расчет доставки</h4>
+                      <p className="text-sm text-gray-600">
+                        Автоматически рассчитывать стоимость доставки
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm">
+                      Включено
+                    </Button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 border rounded-lg">
+                    <div>
+                      <h4 className="font-medium">Режим технического обслуживания</h4>
+                      <p className="text-sm text-gray-600">
+                        Временно отключить прием заказов
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm">
+                      Выключено
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
+  )
+}

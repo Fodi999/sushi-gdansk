@@ -1,0 +1,238 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String
+  phone     String?
+  address   String?
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+  accounts  Account[]
+  sessions  Session[]
+  cartItems CartItem[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  image       String?
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  image       String?
+  categoryId  String
+  category    Category    @relation(fields: [categoryId], references: [id])
+  ingredients String?
+  weight      String?
+  available   Boolean     @default(true)
+  featured    Boolean     @default(false)
+  discount    Float?      @default(0)
+  orderItems  OrderItem[]
+  cartItems   CartItem[]
+  recipeItems RecipeItem[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+// Ингредиенты на складе (сырье)
+model Ingredient {
+  id             String             @id @default(cuid())
+  name           String             @unique
+  description    String?
+  unit           String             @default("кг") // единица измерения по умолчанию
+  currentStock   Float              @default(0) // текущее количество на складе
+  minStock       Float              @default(0) // минимальный остаток (для уведомлений)
+  purchasePrice  Float              @default(0) // средняя закупочная цена
+  category       IngredientCategory @default(OTHER)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  stockItems     StockItem[]
+  recipeItems    RecipeItem[]
+}
+
+enum IngredientCategory {
+  FISH          // Рыба (лосось, тунец, угорь и т.д.)
+  SEAFOOD       // Морепродукты (креветки, краб, икра)
+  RICE          // Рис
+  VEGETABLES    // Овощи (огурец, авокадо)
+  SEAWEED       // Водоросли (нори, чука)
+  SAUCES        // Соусы (соевый, унаги, васаби)
+  CHEESE        // Сыры (сливочный, филадельфия)
+  SEASONINGS    // Приправы (имбирь, кунжут)
+  PACKAGING     // Упаковка
+  OTHER         // Прочее
+}
+
+// Складские позиции (партии поступления ингредиентов)
+model StockItem {
+  id             String     @id @default(cuid())
+  ingredientId   String
+  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity       Float      // количество в партии
+  unit           String     // единица измерения
+  grossWeight    Float?     // вес брутто (с упаковкой)
+  netWeight      Float?     // вес нетто (без упаковки)
+  purchasePrice  Float      // закупочная цена за единицу
+  supplier       String?    // поставщик
+  expiryDate     DateTime?  // срок годности
+  receivedDate   DateTime   @default(now()) // дата прихода
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+// История движения ингредиентов
+model StockMovement {
+  id             String            @id @default(cuid())
+  type           StockMovementType
+  ingredientName String
+  quantity       Float
+  unit           String            @default("кг")
+  price          Float?
+  supplier       String?
+  notes          String?
+  createdBy      String?
+  createdAt      DateTime          @default(now())
+}
+
+enum StockMovementType {
+  ARRIVAL       // Приход
+  WRITE_OFF     // Списание
+  USED_IN_ORDER // Использовано в заказе
+  RETURN        // Возврат
+  ADJUSTMENT    // Корректировка
+  EXPIRED       // Списание по сроку годности
+}
+
+// Рецепты (состав блюд из ингредиентов)
+model RecipeItem {
+  id           String     @id @default(cuid())
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+  quantity     Float      // количество ингредиента
+  unit         String     // единица измерения
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([productId, ingredientId])
+}
+
+model Order {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  status            OrderStatus   @default(PENDING)
+  total             Float
+  subtotal          Float
+  deliveryFee       Float         @default(0)
+  deliveryAddress   String
+  phone             String
+  email             String?
+  notes             String?
+  paymentMethod     PaymentMethod @default(CASH)
+  paymentStatus     PaymentStatus @default(PENDING)
+  estimatedDelivery DateTime?
+  orderItems        OrderItem[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Float
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  quantity  Int      @default(1)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  DELIVERING
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
